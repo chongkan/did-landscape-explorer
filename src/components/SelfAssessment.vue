@@ -619,18 +619,18 @@ function canAdvance(): boolean {
           </p>
         </div>
 
-        <!-- Attestto DID branded promo -->
+        <!-- Attestto Creds branded promo -->
         <div class="identity-card identity-card--inactive" style="border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 6%, transparent);">
           <div class="flex items-center gap-3 w-full">
             <span class="text-2xl">🔐</span>
             <div class="flex-1">
-              <div class="text-xs font-semibold text-secondary">Attestto DID</div>
+              <div class="text-xs font-semibold text-secondary">Attestto Creds</div>
               <div class="text-[10px] text-dim leading-tight mt-0.5">
-                Self-sovereign identity wallet with DIDComm v2, selective disclosure, and W3C Credential Handler API support.
+                Self-sovereign credential wallet with DIDComm v2, selective disclosure, and W3C Credential Handler API support.
               </div>
             </div>
             <a
-              href="https://github.com/Attestto-com/attestto-did"
+              href="https://github.com/Attestto-com/attestto-creds"
               target="_blank"
               class="btn-accent text-xs whitespace-nowrap"
             >Install Extension</a>

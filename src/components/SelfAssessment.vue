@@ -6,6 +6,7 @@ import { FEATURE_DEFINITIONS } from '@/config/taxonomy'
 import type { AssessmentStatus, UseCase, UseCaseCategory, MethodEntry, SigningMethod, Methodology } from '@/types/method'
 import { REGISTRY_TYPES } from '@/config/taxonomy'
 import { repoZipUrl } from '@/config/urls'
+import { discoverWallets, type WalletAnnouncement } from '@/protocols/credential-wallet-protocol'
 
 const { methods, useCases, loadAll } = useMethodsData()
 onMounted(loadAll)
@@ -46,14 +47,34 @@ const CONNECT_OPTIONS: { key: ConnectFlow; label: string; description: string; i
 ]
 
 const selectedFlow = ref<ConnectFlow | null>(null)
-const chapiNoHandler = ref(false)
+const detectedWallets = ref<WalletAnnouncement[]>([])
+const selectedWallet = ref<WalletAnnouncement | null>(null)
+const walletDiscoveryDone = ref(false)
 
-/** Connect identity wallet via W3C Credential Handler API (CHAPI) */
-async function connectIdentityWallet() {
+/** Discover all credential wallet extensions via the universal handshake */
+async function discoverCredentialWallets() {
   identityConnecting.value = true
-  chapiNoHandler.value = false
+  walletDiscoveryDone.value = false
+  detectedWallets.value = []
+  selectedWallet.value = null
   try {
-    // Build a DIDAuthentication VP request per W3C CHAPI / Credential Handler API
+    const wallets = await discoverWallets(1000)
+    detectedWallets.value = wallets
+    // Auto-select if exactly one wallet found
+    if (wallets.length === 1) {
+      selectedWallet.value = wallets[0]
+      await requestPresentation()
+    }
+  } finally {
+    walletDiscoveryDone.value = true
+    if (!identityConnected.value) identityConnecting.value = false
+  }
+}
+
+/** Request DID presentation from the selected wallet via CHAPI */
+async function requestPresentation() {
+  identityConnecting.value = true
+  try {
     const vpRequest = {
       web: {
         VerifiablePresentation: {
@@ -66,11 +87,9 @@ async function connectIdentityWallet() {
     const credential = await navigator.credentials.get(vpRequest as unknown as globalThis.CredentialRequestOptions)
     if (credential && 'data' in credential) {
       const vp = (credential as { data: Record<string, unknown> }).data
-      // Extract the holder DID from the VP
       const holderDid = (vp.holder as string) ?? ''
       if (holderDid.startsWith('did:')) {
         contributorDid.value = holderDid
-        // Detect signing method from DID prefix
         const methodPrefix = holderDid.split(':').slice(0, 2).join(':') as SigningMethod
         signingMethod.value = (['did:key', 'did:web', 'did:pkh', 'did:ens', 'did:sns'] as SigningMethod[]).includes(methodPrefix)
           ? methodPrefix
@@ -79,12 +98,8 @@ async function connectIdentityWallet() {
         return
       }
     }
-    // credentials.get returned null → no handler responded
-    chapiNoHandler.value = true
     identityConnected.value = false
   } catch {
-    // NotAllowedError, AbortError, or no CHAPI polyfill → no handler
-    chapiNoHandler.value = true
     identityConnected.value = false
   } finally {
     identityConnecting.value = false
@@ -133,7 +148,7 @@ function selectFlow(flow: ConnectFlow) {
   if (flow === 'wallet') {
     connectWallet()
   } else if (flow === 'extension') {
-    connectIdentityWallet()
+    discoverCredentialWallets()
   }
   // 'github' waits for Phase 4 integration
 }
@@ -566,28 +581,56 @@ function canAdvance(): boolean {
         <button class="btn-outline mt-2" @click="connectWallet">Retry</button>
       </div>
 
-      <!-- Identity wallet: no handler detected — install promo -->
-      <div v-else-if="selectedFlow === 'extension' && chapiNoHandler && !identityConnecting" class="space-y-3">
+      <!-- Identity wallet: wallets discovered — show picker -->
+      <div v-else-if="selectedFlow === 'extension' && walletDiscoveryDone && detectedWallets.length > 0 && !identityConnected" class="space-y-3">
+        <p class="text-help text-dim text-xs">
+          {{ detectedWallets.length }} credential wallet{{ detectedWallets.length > 1 ? 's' : '' }} detected.
+          Select one to present your DID:
+        </p>
+        <div class="space-y-2">
+          <button
+            v-for="w in detectedWallets"
+            :key="w.did"
+            class="identity-card w-full"
+            :class="selectedWallet?.did === w.did ? 'identity-card--active' : 'identity-card--inactive'"
+            @click="selectedWallet = w; requestPresentation()"
+          >
+            <img v-if="w.icon" :src="w.icon" :alt="w.name" class="w-8 h-8 rounded" />
+            <span v-else class="text-xl">🔐</span>
+            <div class="flex-1 text-left">
+              <div class="text-xs font-semibold text-secondary">{{ w.name }}</div>
+              <div class="text-[10px] text-dim font-mono leading-tight mt-0.5">{{ w.did }}</div>
+              <div class="text-[10px] text-dim leading-tight">
+                by {{ w.maintainer.name }}
+                <span v-if="w.protocols.length" class="text-ghost"> · {{ w.protocols.join(', ') }}</span>
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Identity wallet: no wallets detected — install promo -->
+      <div v-else-if="selectedFlow === 'extension' && walletDiscoveryDone && detectedWallets.length === 0" class="space-y-3">
         <div class="callout-warning">
           <p class="callout__title">No identity wallet detected</p>
           <p class="callout__body">
-            No W3C Credential Handler responded. Install a compatible identity wallet extension
-            to present your DID credential.
+            No credential wallet extensions responded to the discovery handshake.
+            Install one to present your DID.
           </p>
         </div>
 
-        <!-- Attestto Vault branded promo (like Phantom install promo pattern) -->
+        <!-- Attestto DID branded promo -->
         <div class="identity-card identity-card--inactive" style="border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 6%, transparent);">
           <div class="flex items-center gap-3 w-full">
             <span class="text-2xl">🔐</span>
             <div class="flex-1">
-              <div class="text-xs font-semibold text-secondary">Attestto Vault</div>
+              <div class="text-xs font-semibold text-secondary">Attestto DID</div>
               <div class="text-[10px] text-dim leading-tight mt-0.5">
-                Self-sovereign identity wallet with DIDComm v2, selective disclosure, and W3C Credential API support.
+                Self-sovereign identity wallet with DIDComm v2, selective disclosure, and W3C Credential Handler API support.
               </div>
             </div>
             <a
-              href="https://github.com/nicholasgriffintn/nicholasgriffintn"
+              href="https://github.com/Attestto-com/attestto-did"
               target="_blank"
               class="btn-accent text-xs whitespace-nowrap"
             >Install Extension</a>
@@ -595,13 +638,13 @@ function canAdvance(): boolean {
         </div>
 
         <p class="text-dim text-[10px] text-center">
-          Or use any W3C
-          <a href="https://w3c-ccg.github.io/credential-handler-api/" target="_blank" class="text-status-info hover:underline">Credential Handler API</a>
-          compatible wallet — Spruce, Trinsic, Walt.id, etc.
+          Or use any wallet implementing the
+          <a href="https://w3c-ccg.github.io/credential-handler-api/" target="_blank" class="text-status-info hover:underline">Credential Wallet Discovery Protocol</a>
+          — Spruce, Trinsic, Walt.id, etc.
         </p>
 
-        <button class="btn-outline w-full" @click="connectIdentityWallet">
-          Retry Detection
+        <button class="btn-outline w-full" @click="discoverCredentialWallets">
+          Retry Discovery
         </button>
       </div>
 
